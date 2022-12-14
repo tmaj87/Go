@@ -1,5 +1,5 @@
 package main
- 
+
 import (
     "github.com/go-vgo/robotgo"
     "log"
@@ -10,10 +10,10 @@ import (
     "sync"
     "time"
 )
- 
+
 const timeCommand = "echo $((`ioreg -c IOHIDSystem | sed -e '/HIDIdleTime/ !{ d' -e 't' -e '}' -e 's/.* = //g' -e 'q'` / 1000000000))"
 const idleTrigger = 120
- 
+
 func main() {
     wg := sync.WaitGroup{}
     wg.Add(1)
@@ -22,14 +22,14 @@ func main() {
     go moveMouse(pipe)
     wg.Wait()
 }
- 
+
 func moveMouse(c <-chan byte) {
     for range c {
         x, y := robotgo.GetMousePos()
         robotgo.MoveMouseSmooth(x - 2 + rand.Intn(4), y - 2 + rand.Intn(4))
     }
 }
- 
+
 func notifyWhenIdle(c chan<- byte) {
     sb := new(strings.Builder)
     for {
@@ -45,7 +45,7 @@ func notifyWhenIdle(c chan<- byte) {
         time.Sleep(2 * time.Second)
     }
 }
- 
+
 func convertToInt(sb *strings.Builder) int64 {
     idle, err := strconv.ParseInt(strings.TrimSpace(sb.String()), 10, 64)
     if err != nil {
