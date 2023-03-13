@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	WaitTrigger = 120
-	TimeCommand = "echo $((`ioreg -c IOHIDSystem | sed -e '/HIDIdleTime/ !{ d' -e 't' -e '}' -e 's/.* = //g' -e 'q'` / 1000000000))"
+	WaitTrigger      = 120
+	TimeCommand      = "echo $((`ioreg -c IOHIDSystem | sed -e '/HIDIdleTime/ !{ d' -e 't' -e '}' -e 's/.* = //g' -e 'q'` / 1000000000))"
 	LockScreenScript = `import sys,Quartz
 try:
 	print(Quartz.CGSessionCopyCurrentDictionary())
@@ -24,8 +24,8 @@ except:
 type Waiter interface {
 	Init()
 	IsScreenLocked() bool
-	Increment()
-	Reset()
+	IncrementDelay()
+	ResetDelay()
 	Move(c <-chan byte)
 	Notify(c chan<- byte)
 	ShouldNotify(idle int64) bool
@@ -47,7 +47,7 @@ func main() {
 }
 
 func (s *Sleeper) Init() {
-	s.Reset()
+	s.ResetDelay()
 	c := make(chan byte, 4)
 	go s.Notify(c)
 	go s.Move(c)
@@ -62,9 +62,9 @@ func (s *Sleeper) Notify(c chan<- byte) {
 		if err := cmd.Run(); err != nil {
 			log.Fatalln("Command Run() error: ", err)
 		}
-		if idle := convertToInt(sb); s.ShouldNotify(idle) {
+		if idle := stringToInt64(sb.String()); s.ShouldNotify(idle) {
 			c <- 1
-			s.Reset()
+			s.ResetDelay()
 		}
 		time.Sleep(time.Duration(s.delay) * time.Second)
 	}
@@ -72,9 +72,11 @@ func (s *Sleeper) Notify(c chan<- byte) {
 
 func (s *Sleeper) ShouldNotify(idle int64) bool {
 	if s.IsScreenLocked() {
+		s.IncrementDelay()
 		return false
 	}
 	if idle < WaitTrigger {
+		s.IncrementDelay()
 		return false
 	}
 	return true
@@ -90,17 +92,16 @@ func (s *Sleeper) IsScreenLocked() bool {
 	if !strings.Contains(sb.String(), "CGSSessionScreenIsLocked = 1") {
 		return false
 	}
-	s.Increment()
 	return true
 }
 
-func (s *Sleeper) Increment() {
-	if s.delay < WaitTrigger {
+func (s *Sleeper) IncrementDelay() {
+	if s.delay < WaitTrigger/2 {
 		s.delay += 1
 	}
 }
 
-func (s *Sleeper) Reset() {
+func (s *Sleeper) ResetDelay() {
 	s.delay = 2
 }
 
@@ -111,8 +112,8 @@ func (s *Sleeper) Move(c <-chan byte) {
 	}
 }
 
-func convertToInt(sb *strings.Builder) int64 {
-	idle, err := strconv.ParseInt(strings.TrimSpace(sb.String()), 10, 64)
+func stringToInt64(str string) int64 {
+	idle, err := strconv.ParseInt(strings.TrimSpace(str), 10, 64)
 	if err != nil {
 		log.Fatalln("Conversion error: ", err)
 	}
