@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"github.com/go-vgo/robotgo"
 	"log"
 	"math/rand"
@@ -12,91 +11,104 @@ import (
 	"time"
 )
 
-const timeCommand = "echo $((`ioreg -c IOHIDSystem | sed -e '/HIDIdleTime/ !{ d' -e 't' -e '}' -e 's/.* = //g' -e 'q'` / 1000000000))"
-const idleTrigger = 120
+const (
+	WaitTrigger = 120
+	TimeCommand = "echo $((`ioreg -c IOHIDSystem | sed -e '/HIDIdleTime/ !{ d' -e 't' -e '}' -e 's/.* = //g' -e 'q'` / 1000000000))"
+	LockScreenScript = `import sys,Quartz
+try:
+	print(Quartz.CGSessionCopyCurrentDictionary())
+except:
+	print(".")`
+)
 
-var sleepDelay = 2
+type Waiter interface {
+	Init()
+	IsScreenLocked() bool
+	Increment()
+	Reset()
+	Move(c <-chan byte)
+	Notify(c chan<- byte)
+	ShouldNotify(idle int64) bool
+}
+
+type Sleeper struct {
+	delay int64
+}
+
+// var _ Waiter = Sleeper{}
+var _ Waiter = (*Sleeper)(nil)
 
 func main() {
+	s := &Sleeper{}
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	pipe := make(chan byte, 4)
-	go notifyWhenIdle(pipe)
-	go moveMouse(pipe)
+	s.Init()
 	wg.Wait()
 }
 
-func moveMouse(c <-chan byte) {
-	for range c {
-		x, y := robotgo.GetMousePos()
-		robotgo.MoveSmooth(x-2+rand.Intn(4), y-2+rand.Intn(4))
-	}
+func (s *Sleeper) Init() {
+	s.Reset()
+	c := make(chan byte, 4)
+	go s.Notify(c)
+	go s.Move(c)
 }
 
-func notifyWhenIdle(c chan<- byte) {
+func (s *Sleeper) Notify(c chan<- byte) {
 	sb := new(strings.Builder)
 	for {
 		sb.Reset()
-		cmd := exec.Command("/bin/sh", "-c", timeCommand)
+		cmd := exec.Command("/bin/sh", "-c", TimeCommand)
 		cmd.Stdout = sb
 		if err := cmd.Run(); err != nil {
 			log.Fatalln("Command Run() error: ", err)
 		}
-		if idle := convertToInt(sb); shouldNotify(idle) {
+		if idle := convertToInt(sb); s.ShouldNotify(idle) {
 			c <- 1
-			resetSleep()
+			s.Reset()
 		}
-		time.Sleep(time.Duration(sleepDelay) * time.Second)
+		time.Sleep(time.Duration(s.delay) * time.Second)
 	}
 }
 
-func increaseSleep() {
-	if sleepDelay < idleTrigger {
-		sleepDelay += 1
-	}
-}
-
-func resetSleep() {
-	sleepDelay = 2
-}
-
-func shouldNotify(idle int64) bool {
-	if screenIsLocked() {
+func (s *Sleeper) ShouldNotify(idle int64) bool {
+	if s.IsScreenLocked() {
 		return false
 	}
-	if idle < idleTrigger {
-		return false
-	}
-	hour := time.Now().Hour()
-	if hour < 8 || hour > 20 {
+	if idle < WaitTrigger {
 		return false
 	}
 	return true
 }
 
-func screenIsLocked() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	cmd := exec.CommandContext(
-		ctx,
-		"python3",
-		"-c",
-		"import sys,Quartz; d=Quartz.CGSessionCopyCurrentDictionary(); print(d)",
-	)
-
-	var b []byte
-	var err error
-	if b, err = cmd.CombinedOutput(); err != nil {
-		cancel()
-		log.Fatalln("CGSessionCopyCurrentDictionary error: ", err)
+func (s *Sleeper) IsScreenLocked() bool {
+	sb := new(strings.Builder)
+	cmd := exec.Command("python3", "-c", LockScreenScript)
+	cmd.Stdout = sb
+	if err := cmd.Run(); err != nil {
+		log.Fatalln("Command Run() error: ", err)
+	}
+	if !strings.Contains(sb.String(), "CGSSessionScreenIsLocked = 1") {
 		return false
 	}
-	cancel()
-
-	if !strings.Contains(string(b), "CGSSessionScreenIsLocked = 1") {
-		return false
-	}
-	increaseSleep()
+	s.Increment()
 	return true
+}
+
+func (s *Sleeper) Increment() {
+	if s.delay < WaitTrigger {
+		s.delay += 1
+	}
+}
+
+func (s *Sleeper) Reset() {
+	s.delay = 2
+}
+
+func (s *Sleeper) Move(c <-chan byte) {
+	for range c {
+		x, y := robotgo.GetMousePos()
+		robotgo.MoveSmooth(x-2+rand.Intn(4), y-2+rand.Intn(4))
+	}
 }
 
 func convertToInt(sb *strings.Builder) int64 {
