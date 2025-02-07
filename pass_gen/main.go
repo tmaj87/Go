@@ -5,6 +5,7 @@ import (
     "encoding/base64"
     "errors"
     "net/http"
+    "strconv"
     
     "github.com/gin-gonic/gin"
 )
@@ -49,7 +50,7 @@ func main() {
         if length == "" {
             passwordLength = 32 // default length
         } else {
-            pl, err := c.GetIntQuery("length")
+            pl, err := strconv.Atoi(length)
             if err != nil {
                 c.JSON(http.StatusBadRequest, gin.H{
                     "error": "invalid length parameter",
